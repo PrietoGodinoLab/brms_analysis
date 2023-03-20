@@ -1,27 +1,26 @@
 ---
-title: "Floor analysis"
-author: "Andrea"
-date: "2022-11-09"
-output: pdf_document
+title: "brms_analysis_summary"
+output:
+  pdf_document: default
+date: "2022-11-08"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+# Bayesian model for female larviposition choice analysis.
+
+Import libraries:
 ```{r, echo = FALSE}
-library('dplyr')
-library('car')
-library('brms')
-library('purrr')
 library('tidyr')
-library('ggplot2')
-library('ggridges')
-library('viridis')
+library('purrr')
+library('brms')
+library('dplyr')
 ```
 
-## Floor analysis
+## Load the data
 
-# Load data
 ```{r}
 d_sub <- read.csv('/Users/addena/Documents/R/LSTM/Sand_vs_leaflitter_August.csv', 
                   sep=",") # substrate experiment
@@ -31,246 +30,124 @@ d_pent <- read.csv('/Users/addena/Documents/R/LSTM/C15_vs_PO_data.csv',
                   sep=",") # pentadecane experiment
 ```
 
-# Re-organise data to standardise column names and variables
+## Condense the data into one data frame
+
+We remove cage 7 from the 'naturalistic' condition as it was terminated 
+prematurely.
 
 ```{r}
-d_sub <- rename(d_sub, stim.out=leaf.out)
-d_sub <- rename(d_sub, con.out=sand.out)
-d_sub <- rename(d_sub, stim.right=sand.right)
-d_sub <- rename(d_sub, stim=leaf)
-d_sub <- rename(d_sub, con=sand)
-d_sub$dayday <- ifelse(d_sub$day==1, 'one', 'two')
-d_sub$stim.right[d_sub$stim.right==1] <- 'con'
-d_sub$stim.right[d_sub$stim.right==-1] <- 'stim'
-d_sub$condition <- rep('substrate', length(d_sub$date))
-d_pent <- rename(d_pent, stim.right=stim.blue)
-d_pent$stim.right[d_pent$stim.right==1] <- 'stim'
-d_pent$stim.right[d_pent$stim.right==-1] <- 'con'
-d_pent$female.age.days.oldest <- rep(NA, length(d_pent$date))
-d_pent$dayday <- ifelse(d_pent$day==1, 'one', 'two')
-d_pent$condition <- rep('pentadecane', length(d_pent$date))
-d_nat$dayday <- ifelse(d_nat$day==1, 'one', 'two')
-d_nat$condition <- rep('naturalistic', length(d_nat$date))
+d_sub <- aggregate(cbind(sand, leaf) ~ cage, data = d_sub, FUN = sum, na.rm = T)
+d_sub$experiment <- c(rep('3_substrate', 10))
+d_sub <- rename(d_sub, stim = leaf)
+d_sub <- rename(d_sub, con = sand)
+
+d_nat <- aggregate(cbind(stim, con) ~ cage, data = d_nat, FUN = sum, na.rm = T)
+d_nat$experiment <- c(rep('1_naturalistic', 12))
+d_nat <- d_nat[-7,] # remove cage 7 (terminated prematurely)
+
+d_pent <- aggregate(cbind(stim, con) ~ cage, data = d_pent, FUN = sum, na.rm = T)
+d_pent$experiment <- c(rep('2_pentadecane', 12))
+
+data <- rbind(d_sub, d_nat, d_pent)
+data
 ```
+## Turn the data into binary format
 
-We are *not* going to aggregate the data by day, as we would normally do,
-because in this case we are also interested in how the location in the cage
-(side) affects the outcome, and since that changes every day, we cannot sum
-day 1 and day 2.
+Each pupa in the 'stim' [stimulus] category counts as a success ('1') and each 
+pupa in the 'con' [control] category counts as a failure ('0'). Stimulus and 
+control are defined as follows for the three experimental conditions:
 
-Number of larvae deposited on each day can be quite different - sometimes we get
-the majority of larvae on day 1 and almost nothing on day 2, or the other way
-around. This is why we won't do the analysis using larval numbers directly, but
-we will calculate the preference index instead. A PI of 1 indicates here that 
-all flies larviposited in the stimulus trays (any tray), and a PI of -1 
-indicates that all flies larviposited on the floor (any side).
-
-We also need to correct the preference index for total tray vs. floor area.
-The total floor surface area is much bigger than total tray surface area. We
-will therefore calculate the preference index not based on the number of larvae,
-but on the density of larvae (larvae per cm^2): 
-
-In the 'pentadecane' experiment, the total floor area was 56.5*87 cm = 4915.5 cm^2,
-subdivided into tray area = 1960 cm^2 and floor area = 2955.5 cm^2. 
-
-In the 'substrate' and 'naturalistic' experiments, the total floor area was
-56.5*56.5 cm = 3192.25 cm^2, subdivided into tray area = 980 cm^2 and floor area =
-2212.25 cm^2.
+Substrate: Stimulus = leaf litter, Control = sand; 
+Pentadecane: Stimulus = pentadecane, Control = paraffin oil; 
+Naturalistic: Stimulus = conditioned sand (20 pupae), 
+              Control = unconditioned sand
 
 ```{r}
-# 'pentadecane' condition
-d_pent$tray_percm2 <- (d_pent$stim + d_pent$con) / 1960 # tray pupae per cm2
-d_pent$floor_percm2 <- (d_pent$stim.out + d_pent$con.out) / 2955.5 # floor pupae per cm2
-d_pent$PIdens <- (d_pent$tray_percm2 - d_pent$floor_percm2) /
-                  (d_pent$tray_percm2 + d_pent$floor_percm2)
-d_pent
-
-# 'substrate' condition
-d_sub$tray_percm2 <- (d_sub$stim + d_sub$con) / 980
-d_sub$floor_percm2 <- (d_sub$stim.out + d_sub$con.out) / 2212.25
-d_sub$PIdens <- (d_sub$tray_percm2 - d_sub$floor_percm2) /
-                  (d_sub$tray_percm2 + d_sub$floor_percm2)
-d_sub
-
-# 'naturalistic' condition
-d_nat$tray_percm2 <- (d_nat$stim + d_nat$con) / 980
-d_nat$floor_percm2 <- (d_nat$stim.out + d_nat$con.out) / 2212.25
-d_nat$PIdens <- (d_nat$tray_percm2 - d_nat$floor_percm2) /
-                (d_nat$tray_percm2 + d_nat$floor_percm2)
-d_nat
-
-d_all <- rbind(d_sub, d_pent, d_nat)
-d_all
+data |> mutate(binary = map2(stim, con, 
+                                   ~ c(rep(1, .x), 
+                                       rep(0, .y)))) -> data_binary
+data_binary <- unnest(data=data_binary, cols=binary)
+class(data_binary$cage) <- 'factorial'
+class(data_binary$experiment) <- 'factorial'
+data_binary
 ```
-# Overall analysis
+## Prepare brms model
+
+with 'cage' as group-level effect and 'experiment' as 
+population-level effect. Adjust beta priors from flat to normal.
 
 ```{r}
-Anova(aov(PIdens ~ condition + dayday + stim.right, data = d_all))
+formula0 <- brms::brmsformula('binary ~ experiment + (1|cage)')
+prior_b <- prior(normal(0,5), class = b)
+formula0
+prior_b
 ```
 
-Anova suggests that the preference for tray/floor depends on significantly on
-the day of the experiment, and very weakly on experimental condition.
+As the dependent variable is binary, samples will be drawn from a Bernoulli 
+distribution with logit link.
 
-Let's look at the 'day' analysis first.
+```{r, echo=FALSE}
+data_m0 <- brms::brm(data = data_binary, formula = formula0, 
+                     family = bernoulli(link='logit'), prior = prior_b)
+data_m0
+```
+
+## Evaluate model
+
+Rhat and Bulk_ESS values suggest that the model converged well.
+
+To confirm, we plot the model to visually inspect the chains.
 
 ```{r}
-ggplot(d_all, aes(x = dayday, y = PIdens, fill = condition)) +
-  geom_boxplot(notch = T, notchwidth = 0.9) +
-  scale_fill_viridis(discrete = T, alpha = 0.6) +
-  ylim(-1,1) +
-  coord_flip() +
-  theme_classic() + 
-  geom_hline(yintercept = 0, linetype = 'dashed', color = 'grey')
+plot(data_m0)
 ```
-OK! So we get more floor depositions on day 2, a LOT more in the case of the
-'substrate' and 'pentadecane' condition but there is even a trend in the
-'naturalistic' condition. Let's test the distributions against each other.
+Chains look good, the model has converged well. 
+
+## Model results
+
+We can now look at conditional effects predicted by the model.
 
 ```{r}
-ks.test(subset(d_all, condition=='substrate' & dayday=='one')$PIdens, 
-        subset(d_all, condition=='substrate' & dayday=='two')$PIdens)
-ks.test(subset(d_all, condition=='naturalistic' & dayday=='one')$PIdens, 
-        subset(d_all, condition=='naturalistic' & dayday=='two')$PIdens)
-ks.test(subset(d_all, condition=='pentadecane' & dayday=='one')$PIdens, 
-        subset(d_all, condition=='pentadecane' & dayday=='two')$PIdens)
-
-wilcox.test(subset(d_all, condition=='substrate' & dayday=='one')$PIdens, 
-        subset(d_all, condition=='substrate' & dayday=='two')$PIdens)
-wilcox.test(subset(d_all, condition=='naturalistic' & dayday=='one')$PIdens, 
-        subset(d_all, condition=='naturalistic' & dayday=='two')$PIdens)
-wilcox.test(subset(d_all, condition=='pentadecane' & dayday=='one')$PIdens, 
-        subset(d_all, condition=='pentadecane' & dayday=='two')$PIdens)
-
+p <- conditional_effects(data_m0)
+plot(p)
+p[[1]]
 ```
-Interesting. Only the Wilcoxon rank sum test shows a significant difference in 
-the median, and only for the 'substrate' condition. The Kolmogorov-Smirnov test
-does not think the distributions are different (although some come close).
+The model supports a preference only in the 'substrate' condition, with an 
+estimated preference of 0.9067 for '1', i.e. leaf litter. No preference is 
+supported for the 'pentadecane' and 'naturalistic' experiments. Thus, the 
+conditional effects support the results from behavioural experiments and mirror
+the preference index analysis.
 
-Let's see if we see something if we bunch all conditions together.
+## Hypothesis tests
+
+Just to make sure, we can check the outcomes for each individual population-
+level effect:
 
 ```{r}
-ks.test(subset(d_all, dayday=='one')$PIdens, 
-        subset(d_all, dayday=='two')$PIdens)
-wilcox.test(subset(d_all, dayday=='one')$PIdens, 
-        subset(d_all, dayday=='two')$PIdens)
+hyp1 <- hypothesis(data_m0, 'Intercept > 0')
+plot(hyp1)
+hyp1
 ```
 
-Interesting. So we do see a significant trend towards larviposition on the floor
-on day 2 when we consider all experimental conditions together. Let's plot that.
+Intercept is a dummy variable for the 'naturalistic' condition. The distribution
+has an estimated median of 0.06 and does not support a preference for either 
+side.
 
 ```{r}
-ggplot(d_all, aes(x = dayday, y = PIdens, fill = dayday)) +
-  geom_boxplot(notch = T, notchwidth = 0.9) +
-  scale_fill_viridis(discrete = T, alpha = 0.6) +
-  ylim(-1,1) +
-  coord_flip() +
-  theme_classic() + 
-  geom_hline(yintercept = 0, linetype = 'dashed', color = 'grey')
+hyp2 <- hypothesis(data_m0, 'experiment2_pentadecane > 0')
+plot(hyp2)
+hyp2
 ```
-We can see from the notches that these distributions are significantly different.
-Interesting. I think this is result number 1 for figure S2. In this vein, we
-will definitely want a plot of overall density PIs for the three conditions. 
-But we need overall values for that instead of by-day, so let's calculate a bit 
-more.
+
+The distribution for the 'pentadecane' condition has an estimate of -0.06 and 
+does not support a preference for either side.
 
 ```{r}
-d_all_cage <- aggregate(cbind(con, con.out, stim, stim.out) ~ cage + condition,
-                        data= d_all, FUN = sum, na.rm = T)
-d_all_cage$tray_percm2 <- (d_all_cage$stim + d_all_cage$con) / 1960 # tray pupae per cm2
-d_all_cage$floor_percm2 <- (d_all_cage$stim.out + d_all_cage$con.out) / 3440 # floor pupae per cm2
-d_all_cage$PIdens <- (d_all_cage$tray_percm2 - d_all_cage$floor_percm2) /
-                  (d_all_cage$tray_percm2 + d_all_cage$floor_percm2)
-d_all_cage
+hyp3 <- hypothesis(data_m0, 'experiment3_substrate > 0')
+plot(hyp3)
+hyp3
 ```
 
-Now plot:
-
-```{r}
-ggplot(d_all_cage, aes(x = condition, y = PIdens, fill = condition)) +
-  geom_boxplot(notch = T, notchwidth = 0.9) +
-  geom_jitter(color = 'black', width = 0.2, size = 0.4) +
-  scale_fill_viridis(discrete = T, alpha = 0.6) +
-  ylim(-1,1) +
-  coord_flip() +
-  theme_classic() + 
-  geom_hline(yintercept = 0, linetype = 'dashed', color = 'grey')
-```
-Ok looks good, the corrected PIs definitely cluster above 0, that's good news.
-
-# Special case - 'pentadecane' experiment
-
-We know from a previous analysis that stimulus side *does* have an effect on 
-larvipositions on the floor but not on the trays. Let's quickly analyse this,
-too.
-
-First, let's calculate actual preference indices, for tray and floor. These do 
-not need to be corrected.
-
-```{r}
-d_all$PItray <- (d_all$stim - d_all$con) / (d_all$stim + d_all$con)
-d_all$PIfloor <- (d_all$stim.out - d_all$con.out) / (d_all$stim.out + d_all$con.out)
-d_all
-```
-Another way of showing this, because the plot of PIfloor by stim.right is
-confusing... Let's calculate a preference index for side
-
-```{r}
-d_all$PIside_tray <- ifelse(d_all$stim.right=='stim', (d_all$stim - d_all$con)/
-                                                         (d_all$stim + d_all$con),
-                    (d_all$con - d_all$stim)/(d_all$con + d_all$stim))
-d_all$PIside_floor <- ifelse(d_all$stim.right=='stim', (d_all$stim.out - d_all$con.out)/
-                                                         (d_all$stim.out + d_all$con.out),
-                    (d_all$con.out - d_all$stim.out)/(d_all$con.out + d_all$stim.out))
-```
-
-Now stats and plots.
-
-```{r}
-Anova(aov(PIfloor ~ stim.right + dayday, data=subset(d_all, condition=='pentadecane'))) # very strong effect of side
-ks.test(subset(d_all, condition=='pentadecane')$PIside_tray,
-        subset(d_all, condition=='pentadecane')$PIside_floor) # p = 0.00339
-wilcox.test(subset(d_all, condition=='pentadecane')$PIside_tray,
-        subset(d_all, condition=='pentadecane')$PIside_floor) # p = 0.0002812
-
-d_all_long <- pivot_longer(d_all, PIside_tray:PIside_floor)
-
-ggplot(subset(d_all_long, condition=='pentadecane'), aes(x = name, y = value, fill = name)) +
-  geom_boxplot(notch = T) +
-  scale_fill_viridis(discrete = T, alpha = 0.6) +
-  geom_jitter(color = 'black', width = 0.2, size = 0.4) +
-  ylim(-1,1) +
-  coord_flip() +
-  theme_classic() +
-  geom_hline(yintercept = 0, linetype = 'dashed', color = 'grey')
-```
-
-Stimulus side has a significant effect in the anova. The Kolmogorov Smirnov test
-shows that the distributions are significantly different, and the Wilcoxon rank
-sum test supports a difference in the medians, too.
-
-BUT this only holds for larvae deposited on the floor, NOT those that were
-deposited on the trays. Floor larvipositions seems to be governed by different
-cues!
-
-```{r}
-Anova(aov(PItray ~ stim.right + dayday, data=subset(d_all, condition=='pentadecane'))) # very weak effect of day
-ks.test(subset(d_all, condition=='pentadecane' & stim.right=='stim')$PItray,
-        subset(d_all, condition=='pentadecane' & stim.right=='con')$PItray) # p = 0.09955
-wilcox.test(subset(d_all, condition=='pentadecane' & stim.right=='stim')$PItray,
-        subset(d_all, condition=='pentadecane' & stim.right=='con')$PItray) # p = 0.09955
-
-ks.test(subset(d_all, condition=='pentadecane' & stim.right=='stim')$PIside_tray,
-        subset(d_all, condition=='pentadecane' & stim.right=='con')$PIside_tray)
-
-ks.test(subset(d_all, condition=='pentadecane' & stim.right=='stim')$PIside_floor,
-        subset(d_all, condition=='pentadecane' & stim.right=='stim')$PIside_floor)
-
-ggplot(subset(d_all_long, condition=='pentadecane'), aes(x = name, y = value, fill = stim.right)) +
-  geom_boxplot(notch = T) +
-  scale_fill_viridis(discrete = T, alpha = 0.6) +
-  ylim(-1,1) +
-  coord_flip() +
-  theme_classic() +
-  geom_point(position = position_jitterdodge(jitter.width = 0.15), size = 0.5) +
-  geom_hline(yintercept = 0, linetype = 'dashed', color = 'grey')
-```
+The distribution for the 'substrate' condition clusters around an estimate of 
+2.22 with an infinite evidence ratio and a posterior probability of 1, 
+supporting a strong preference for choosing '1', i.e. leaf litter.
